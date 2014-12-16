@@ -29,22 +29,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 
-argparser = argparse.ArgumentParser(
-    description='Report daily activity on Wikimedia blog')
-argparser.add_argument('--date', default='yesterday',
-                       help='Date to compute the report for. Either '
-                       '\'yesterday\' or given as YYYY-MM-DD. Has to be a past'
-                       'date. (default: yesterday)')
-
-args = argparser.parse_args()
-
-# FIXME: Load configs from a file.
-db_url = os.environ['BLOGREPORT_DB']
-email_sender = os.environ['BLOGREPORT_FROM']
-email_recipient = os.environ['BLOGREPORT_TO']
-email_cc = os.environ['BLOGREPORT_CC']
-
-
 def parse_string_to_date(date_str):
     """Parse a string into a datetime.date.
 
@@ -61,15 +45,6 @@ def parse_string_to_date(date_str):
     except ValueError:
         raise ValueError("Could not parse '%s' as date" % (date_str))
 
-date_of_interest = parse_string_to_date(args.date)
-if date_of_interest >= datetime.utcnow().date():
-   raise ValueError("Given date is not before today")
-
-
-Base = declarative_base()
-Base.metadata.bind = create_engine(db_url)
-Session = sessionmaker(bind=Base.metadata.bind, autocommit=True)
-
 
 def send_email(sender, recipient, subject, text, cc=None):
     """Send an e-mail by shelling out to 'sendmail'."""
@@ -83,109 +58,134 @@ def send_email(sender, recipient, subject, text, cc=None):
     p.communicate(message.as_string().encode('utf8'))
 
 
-class BlogVisit(Base):
-    __table__ = Table('WikimediaBlogVisit_5308166', Base.metadata,
-                      autoload=True)
+if __name__ == "__main__":
+    argparser = argparse.ArgumentParser(
+        description='Report daily activity on Wikimedia blog')
+    argparser.add_argument('--date', default='yesterday',
+                           help='Date to compute the report for. Either '
+                           '\'yesterday\' or given as YYYY-MM-DD. Has to be a '
+                           'past date. (default: yesterday)')
 
-session = Session()
-q = session.query(BlogVisit).filter(BlogVisit.webHost == 'blog.wikimedia.org')
-q = q.filter(BlogVisit.timestamp.startswith(
-    date_of_interest.strftime('%Y%m%d')))
+    args = argparser.parse_args()
 
-uniques = set()
-visits = 0
-referrers = collections.Counter()
-searches = collections.Counter()
-urls = collections.Counter()
-ref_domains = collections.Counter()
+    # FIXME: Load configs from a file.
+    db_url = os.environ['BLOGREPORT_DB']
+    email_sender = os.environ['BLOGREPORT_FROM']
+    email_recipient = os.environ['BLOGREPORT_TO']
+    email_cc = os.environ['BLOGREPORT_CC']
 
-for visit in q:
-    # Exclude previews, testblogs, and WP admin pages
-    if re.search(r'[&?]preview=|testblog|\/wp-',
-                 visit.event_requestUrl):
-        continue
-    # Transform all searches into '(search)'
-    if re.search(r'[&?]s=', visit.event_requestUrl):
-        try:
-            visit_path = visit.event_requestUrl.rsplit('?', 1)[1]
-            search = dict(urlparse.parse_qsl(visit_path)).pop('s', '')
-            searches[search] += 1
-        except:
-            pass
-        visit.event_requestUrl = '(search)'
-    urls[visit.event_requestUrl] += 1
-    visits += 1
-    uniques.add(visit.clientIp)
-    ref = visit.event_referrerUrl
-    if ref is not None:
-        if ref.startswith('https://blog.wikimedia.org'):
-            ref = ref[26:]
-        domain = urlparse.urlparse(visit.event_referrerUrl).hostname
-        if domain:
-            if domain.startswith('www.'):
-                domain = domain[4:]
-            ref_domains[domain] += 1
-    referrers[ref] += 1
+    date_of_interest = parse_string_to_date(args.date)
+    if date_of_interest >= datetime.utcnow().date():
+        raise ValueError("Given date is not before today")
 
-body = StringIO()
+    Base = declarative_base()
+    Base.metadata.bind = create_engine(db_url)
+    Session = sessionmaker(bind=Base.metadata.bind, autocommit=True)
 
-body.write('Total visits: %d\n' % visits)
-body.write('Unique visitors: %d\n' % len(uniques))
-body.write('\n')
+    class BlogVisit(Base):
+        __table__ = Table('WikimediaBlogVisit_5308166', Base.metadata,
+                          autoload=True)
 
-body.write('\n')
-body.write('Pages / hits (ordered by number of hits):\n')
-body.write('=========================================\n')
-for url, count in sorted(urls.iteritems(), key=operator.itemgetter(1),
-                         reverse=True):
-    body.write('%s\t%s\n' % (url, count))
+    session = Session()
+    q = session.query(BlogVisit).filter(
+        BlogVisit.webHost == 'blog.wikimedia.org')
+    q = q.filter(BlogVisit.timestamp.startswith(
+        date_of_interest.strftime('%Y%m%d')))
 
-body.seek(0)
+    uniques = set()
+    visits = 0
+    referrers = collections.Counter()
+    searches = collections.Counter()
+    urls = collections.Counter()
+    ref_domains = collections.Counter()
 
-send_email(
-    'eventlogging@stat1.eqiad.wmnet',
-    'tbayer@wikimedia.org',
-    'Wikimedia blog stats for %s: pageviews'
-    % date_of_interest.strftime('%Y-%m-%d'),
-    body.read(),
-    'ori@wikimedia.org'
-)
+    for visit in q:
+        # Exclude previews, testblogs, and WP admin pages
+        if re.search(r'[&?]preview=|testblog|\/wp-',
+                     visit.event_requestUrl):
+            continue
+        # Transform all searches into '(search)'
+        if re.search(r'[&?]s=', visit.event_requestUrl):
+            try:
+                visit_path = visit.event_requestUrl.rsplit('?', 1)[1]
+                search = dict(urlparse.parse_qsl(visit_path)).pop('s', '')
+                searches[search] += 1
+            except:
+                pass
+            visit.event_requestUrl = '(search)'
+        urls[visit.event_requestUrl] += 1
+        visits += 1
+        uniques.add(visit.clientIp)
+        ref = visit.event_referrerUrl
+        if ref is not None:
+            if ref.startswith('https://blog.wikimedia.org'):
+                ref = ref[26:]
+            domain = urlparse.urlparse(visit.event_referrerUrl).hostname
+            if domain:
+                if domain.startswith('www.'):
+                    domain = domain[4:]
+                ref_domains[domain] += 1
+        referrers[ref] += 1
 
-body.close()
-body = StringIO()
+    body = StringIO()
 
-body.write('Search queries / count (sorted by number of queries):\n')
-body.write('=====================================================\n')
-for search, count in sorted(searches.iteritems(),
-                            key=operator.itemgetter(1), reverse=True):
-    body.write('"%s"\t%s\n' % (search, count))
+    body.write('Total visits: %d\n' % visits)
+    body.write('Unique visitors: %d\n' % len(uniques))
+    body.write('\n')
 
-body.write('\n')
-body.write('Referring domain names / referrals (sorted by number of '
-           'referrals):\n')
-body.write('========================================================'
-           '===========\n')
-for hostname, count in sorted(ref_domains.iteritems(),
-                              key=operator.itemgetter(1), reverse=True):
-    body.write('%s\t%s\n' % (hostname, count))
+    body.write('\n')
+    body.write('Pages / hits (ordered by number of hits):\n')
+    body.write('=========================================\n')
+    for url, count in sorted(urls.iteritems(), key=operator.itemgetter(1),
+                             reverse=True):
+        body.write('%s\t%s\n' % (url, count))
 
-body.write('\n')
-body.write('Referrers / count (sorted alphabetically):\n')
-body.write('==========================================\n')
-for url, count in sorted(
-        sorted(referrers.iteritems(), key=operator.itemgetter(0)),
-        reverse=True):
-    if url is None:
-        url = '(no referrer)'
-    body.write('%s\t%s\n' % (url, count))
+    body.seek(0)
 
-body.seek(0)
+    send_email(
+        'eventlogging@stat1.eqiad.wmnet',
+        'tbayer@wikimedia.org',
+        'Wikimedia blog stats for %s: pageviews'
+        % date_of_interest.strftime('%Y-%m-%d'),
+        body.read(),
+        'ori@wikimedia.org'
+        )
 
-send_email(
-    'blogreport@' + socket.getfqdn(),
-    email_recipient,
-    'Wikimedia blog stats for %s: referrers & searches'
-    % date_of_interest.strftime('%Y-%m-%d'),
-    body.read(),
-    email_cc,
-)
+    body.close()
+    body = StringIO()
+
+    body.write('Search queries / count (sorted by number of queries):\n')
+    body.write('=====================================================\n')
+    for search, count in sorted(searches.iteritems(),
+                                key=operator.itemgetter(1), reverse=True):
+        body.write('"%s"\t%s\n' % (search, count))
+
+    body.write('\n')
+    body.write('Referring domain names / referrals (sorted by number of '
+               'referrals):\n')
+    body.write('========================================================'
+               '===========\n')
+    for hostname, count in sorted(ref_domains.iteritems(),
+                                  key=operator.itemgetter(1), reverse=True):
+        body.write('%s\t%s\n' % (hostname, count))
+
+    body.write('\n')
+    body.write('Referrers / count (sorted alphabetically):\n')
+    body.write('==========================================\n')
+    for url, count in sorted(
+            sorted(referrers.iteritems(), key=operator.itemgetter(0)),
+            reverse=True):
+        if url is None:
+            url = '(no referrer)'
+        body.write('%s\t%s\n' % (url, count))
+
+    body.seek(0)
+
+    send_email(
+        'blogreport@' + socket.getfqdn(),
+        email_recipient,
+        'Wikimedia blog stats for %s: referrers & searches'
+        % date_of_interest.strftime('%Y-%m-%d'),
+        body.read(),
+        email_cc,
+    )
