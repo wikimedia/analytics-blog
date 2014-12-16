@@ -23,9 +23,9 @@ from cStringIO import StringIO
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 
-from sqlalchemy import *
+from sqlalchemy import create_engine, Table
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import sessionmaker
 
 
 # FIXME: Load configs from a file.
@@ -54,7 +54,8 @@ def send_email(sender, recipient, subject, text, cc=None):
 
 
 class BlogVisit(Base):
-    __table__ = Table('WikimediaBlogVisit_5308166', Base.metadata, autoload=True)
+    __table__ = Table('WikimediaBlogVisit_5308166', Base.metadata,
+                      autoload=True)
 
 session = Session()
 q = session.query(BlogVisit).filter(BlogVisit.webHost == 'blog.wikimedia.org')
@@ -70,12 +71,13 @@ ref_domains = collections.Counter()
 for visit in q:
     # Exclude previews, testblogs, and WP admin pages
     if re.search(r'[&?]preview=|testblog|\/wp-',
-            visit.event_requestUrl):
+                 visit.event_requestUrl):
         continue
     # Transform all searches into '(search)'
     if re.search(r'[&?]s=', visit.event_requestUrl):
         try:
-            search = dict(urlparse.parse_qsl(visit.event_requestUrl.rsplit('?', 1)[1])).pop('s', '')
+            visit_path = visit.event_requestUrl.rsplit('?', 1)[1]
+            search = dict(urlparse.parse_qsl(visit_path)).pop('s', '')
             searches[search] += 1
         except:
             pass
@@ -103,7 +105,8 @@ body.write('\n')
 body.write('\n')
 body.write('Pages / hits (ordered by number of hits):\n')
 body.write('=========================================\n')
-for url, count in sorted(urls.iteritems(), key=operator.itemgetter(1), reverse=True):
+for url, count in sorted(urls.iteritems(), key=operator.itemgetter(1),
+                         reverse=True):
     body.write('%s\t%s\n' % (url, count))
 
 body.seek(0)
@@ -122,20 +125,24 @@ body = StringIO()
 body.write('Search queries / count (sorted by number of queries):\n')
 body.write('=====================================================\n')
 for search, count in sorted(searches.iteritems(),
-        key=operator.itemgetter(1), reverse=True):
+                            key=operator.itemgetter(1), reverse=True):
     body.write('"%s"\t%s\n' % (search, count))
 
 body.write('\n')
-body.write('Referring domain names / referrals (sorted by number of referrals):\n')
-body.write('===================================================================\n')
+body.write('Referring domain names / referrals (sorted by number of '
+           'referrals):\n')
+body.write('========================================================'
+           '===========\n')
 for hostname, count in sorted(ref_domains.iteritems(),
-        key=operator.itemgetter(1), reverse=True):
+                              key=operator.itemgetter(1), reverse=True):
     body.write('%s\t%s\n' % (hostname, count))
 
 body.write('\n')
 body.write('Referrers / count (sorted alphabetically):\n')
 body.write('==========================================\n')
-for url, count in sorted(sorted(referrers.iteritems(), key=operator.itemgetter(0)), reverse=True):
+for url, count in sorted(
+        sorted(referrers.iteritems(), key=operator.itemgetter(0)),
+        reverse=True):
     if url is None:
         url = '(no referrer)'
     body.write('%s\t%s\n' % (url, count))
@@ -145,7 +152,8 @@ body.seek(0)
 send_email(
     'blogreport@' + socket.getfqdn(),
     email_recipient,
-    'Wikimedia blog stats for %s: referrers & searches' % yesterday.strftime('%Y-%m-%d'),
+    'Wikimedia blog stats for %s: referrers & searches'
+    % yesterday.strftime('%Y-%m-%d'),
     body.read(),
     email_cc,
 )
