@@ -11,6 +11,7 @@ import sys
 reload(sys)
 sys.setdefaultencoding('utf-8')
 
+import argparse
 import collections
 import operator
 import os
@@ -28,13 +29,42 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 
+argparser = argparse.ArgumentParser(
+    description='Report daily activity on Wikimedia blog')
+argparser.add_argument('--date', default='yesterday',
+                       help='Date to compute the report for. Either '
+                       '\'yesterday\' or given as YYYY-MM-DD. Has to be a past'
+                       'date. (default: yesterday)')
+
+args = argparser.parse_args()
+
 # FIXME: Load configs from a file.
 db_url = os.environ['BLOGREPORT_DB']
 email_sender = os.environ['BLOGREPORT_FROM']
 email_recipient = os.environ['BLOGREPORT_TO']
 email_cc = os.environ['BLOGREPORT_CC']
 
-yesterday = datetime.utcnow() - timedelta(days=1)
+
+def parse_string_to_date(date_str):
+    """Parse a string into a datetime.date.
+
+    If the string cannot get parsed to a date, a ValueError is raised.
+
+    :param date_str: String to parse to a datetime.date
+    """
+    if date_str == 'yesterday':
+        return datetime.utcnow().date() - timedelta(days=1)
+
+    # Try to parse ISO date
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        raise ValueError("Could not parse '%s' as date" % (date_str))
+
+date_of_interest = parse_string_to_date(args.date)
+if date_of_interest >= datetime.utcnow().date():
+   raise ValueError("Given date is not before today")
+
 
 Base = declarative_base()
 Base.metadata.bind = create_engine(db_url)
@@ -59,7 +89,8 @@ class BlogVisit(Base):
 
 session = Session()
 q = session.query(BlogVisit).filter(BlogVisit.webHost == 'blog.wikimedia.org')
-q = q.filter(BlogVisit.timestamp.startswith(yesterday.strftime('%Y%m%d')))
+q = q.filter(BlogVisit.timestamp.startswith(
+    date_of_interest.strftime('%Y%m%d')))
 
 uniques = set()
 visits = 0
@@ -114,7 +145,8 @@ body.seek(0)
 send_email(
     'eventlogging@stat1.eqiad.wmnet',
     'tbayer@wikimedia.org',
-    'Wikimedia blog stats for %s: pageviews' % yesterday.strftime('%Y-%m-%d'),
+    'Wikimedia blog stats for %s: pageviews'
+    % date_of_interest.strftime('%Y-%m-%d'),
     body.read(),
     'ori@wikimedia.org'
 )
@@ -153,7 +185,7 @@ send_email(
     'blogreport@' + socket.getfqdn(),
     email_recipient,
     'Wikimedia blog stats for %s: referrers & searches'
-    % yesterday.strftime('%Y-%m-%d'),
+    % date_of_interest.strftime('%Y-%m-%d'),
     body.read(),
     email_cc,
 )
